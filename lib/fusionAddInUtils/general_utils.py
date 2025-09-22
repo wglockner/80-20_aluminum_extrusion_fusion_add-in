@@ -18,9 +18,9 @@ ui = app.userInterface
 
 # Attempt to read DEBUG flag from parent config.
 try:
-    from ... import config
-    DEBUG = config.DEBUG
-except:
+    import config
+    DEBUG = getattr(config, "DEBUG", False)
+except ModuleNotFoundError:
     DEBUG = False
 
 
@@ -62,3 +62,4 @@ def handle_error(name: str, show_message_box: bool = False):
     # If desired you could show an error as a message box.
     if show_message_box:
         ui.messageBox(f'{name}\n{traceback.format_exc()}')
+

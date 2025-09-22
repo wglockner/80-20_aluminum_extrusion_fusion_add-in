@@ -1,7 +1,9 @@
-import adsk.core
 import os
-from ...lib import fusionAddInUtils as futil
-from ... import config
+
+import adsk.core
+
+import config
+from lib import fusionAddInUtils as futil
 app = adsk.core.Application.get()
 ui = app.userInterface
 
@@ -156,3 +158,4 @@ def command_destroy(args: adsk.core.CommandEventArgs):
 
     global local_handlers
     local_handlers = []
+

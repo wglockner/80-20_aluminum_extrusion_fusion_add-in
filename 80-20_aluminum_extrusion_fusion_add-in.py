@@ -1,6 +1,13 @@
 # Assuming you have not changed the general structure of the template no modification is needed in this file.
-from . import commands
-from .lib import fusionAddInUtils as futil
+import os
+import sys
+
+CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
+if CURRENT_DIR not in sys.path:
+    sys.path.insert(0, CURRENT_DIR)
+
+import commands
+from lib import fusionAddInUtils as futil
 
 
 def run(context):

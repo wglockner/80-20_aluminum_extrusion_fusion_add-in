@@ -1,8 +1,10 @@
 import json
-import adsk.core
 import os
-from ...lib import fusionAddInUtils as futil
-from ... import config
+
+import adsk.core
+
+import config
+from lib import fusionAddInUtils as futil
 
 app = adsk.core.Application.get()
 ui = app.userInterface
@@ -126,6 +128,10 @@ def command_execute(args: adsk.core.CommandEventArgs):
 
     # Get a reference to the palette and send the message to the palette javascript
     palette = ui.palettes.itemById(PALETTE_ID)
+    if palette is None:
+        ui.messageBox("Open the palette with the 'Show My Palette' command before sending data.")
+        return
+
     palette.sendInfoToHTML(message_action, message_json)
 
 
@@ -147,3 +153,5 @@ def command_destroy(args: adsk.core.CommandEventArgs):
     global local_handlers
     local_handlers = []
     futil.log(f'{CMD_NAME} Command Destroy Event')
+
+

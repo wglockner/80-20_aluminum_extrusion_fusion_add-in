@@ -1,0 +1,13 @@
+{
+	"autodeskProduct":	"Fusion",
+	"type":	"addin",
+	"author":	"Walter Glockner",
+	"description":	{
+		"":	"Fusion add-in for creating 80/20 aluminum extrusions."
+	},
+	"version":	"",
+	"runOnStartup":	false,
+	"supportedOS":	"windows",
+	"editEnabled":	true,
+	"iconFilename":	"AddInIcon.svg"
+}

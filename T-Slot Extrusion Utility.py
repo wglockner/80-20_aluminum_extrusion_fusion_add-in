@@ -1,10 +1,9 @@
-# T-Slot Extrusion Utility (fixed)
-# - Two-sketch method (clean profile selection)
-# - Symmetric solid extrude (keeps XY mid-length)
-# - Slot cuts with symmetric distance > half-length (version-safe "through all")
-# - Center bore and end-tap pilots sketched on END FACES (always intersects)
-# - No participantBodies (avoids vector type mismatch across builds)
-# Author: ChatGPT (GPT-5 Thinking)
+# T-Slot Extrusion Utility (robust combine-cut version, tool bodies collection fix)
+# - Two sketches: outer bar and slot geometry
+# - Solid extrude: symmetric about sketch plane
+# - Slots: symmetric distance cut (> half-length)
+# - Center bore & end taps: extrude tool bodies, then Combine->Cut (with ObjectCollection)
+# - Clean termination via Destroy handler
 
 import adsk.core, adsk.fusion, adsk.cam, traceback, math
 
@@ -134,22 +133,22 @@ def draw_slots(sketch, prof):
         ln.addByTwoPoints(adsk.core.Point3D.create(x2,y2,0), adsk.core.Point3D.create(x1,y2,0))
         ln.addByTwoPoints(adsk.core.Point3D.create(x1,y2,0), adsk.core.Point3D.create(x1,y1,0))
 
-    # Right (face x=+x, inward -X)
+    # Right (x=+x, inward -X)
     rect( x, -open_w/2,  x - d_open,  open_w/2)
     rect( x - d_open, -neck_w/2,  x - slot_depth,  neck_w/2)
-    # Left  (face x=-x, inward +X)
+    # Left  (x=-x, inward +X)
     rect(-x, -open_w/2, -x + d_open,  open_w/2)
     rect(-x + d_open, -neck_w/2, -x + slot_depth,  neck_w/2)
-    # Top   (face y=+y, inward -Y)
+    # Top   (y=+y, inward -Y)
     rect(-open_w/2,  y,  open_w/2,  y - d_open)
     rect(-neck_w/2,  y - d_open,  neck_w/2,  y - slot_depth)
-    # Bottom(face y=-y, inward +Y)
+    # Bottom(y=-y, inward +Y)
     rect(-open_w/2, -y,  open_w/2, -y + d_open)
     rect(-neck_w/2, -y + d_open,  neck_w/2, -y + slot_depth)
 
     coll = adsk.core.ObjectCollection.create()
     profs = sketch.profiles
-    area_cap = 3.0 * float(neck_w * slot_depth)  # keep to likely slot islands
+    area_cap = 3.0 * float(neck_w * slot_depth)  # likely slot islands
     for i in range(profs.count):
         p = profs.item(i)
         a = abs(p.areaProperties(adsk.fusion.CalculationAccuracy.MediumCalculationAccuracy).area)
@@ -167,7 +166,6 @@ def create_construction_for_slots(comp, prof):
     planes = comp.constructionPlanes
     axes  = comp.constructionAxes
 
-    # X slots (left/right)
     for sx in (-w/2 + off, w/2 - off):
         axisInput = axes.createInput()
         sp = comp.sketches.add(comp.xYConstructionPlane)
@@ -176,7 +174,6 @@ def create_construction_for_slots(comp, prof):
         axisInput.setByTwoPoints(pt, pt2)
         axes.add(axisInput)
 
-    # Y slots (top/bottom)
     for sy in (-h/2 + off, h/2 - off):
         axisInput = axes.createInput()
         sp = comp.sketches.add(comp.xYConstructionPlane)
@@ -192,6 +189,28 @@ def create_construction_for_slots(comp, prof):
     for sy in (-h/2 + off, h/2 - off):
         ip = planes.createInput(); ip.setByOffset(xz, adsk.core.ValueInput.createByReal(sy)); planes.add(ip)
 
+def make_collection(*bodies_or_lists):
+    """Return an ObjectCollection from bodies or lists/tuples of bodies."""
+    coll = adsk.core.ObjectCollection.create()
+    for item in bodies_or_lists:
+        if item is None: 
+            continue
+        if isinstance(item, (list, tuple)):
+            for b in item:
+                if b: coll.add(b)
+        else:
+            coll.add(item)
+    return coll
+
+def combine_cut(comp, target_body, tool_bodies, keep_tool=False):
+    """Boolean cut tool_bodies (single or list) from target_body using Combine."""
+    tools = make_collection(tool_bodies)
+    comb = comp.features.combineFeatures
+    inp = comb.createInput(target_body, tools)  # expects ObjectCollection
+    inp.operation = adsk.fusion.FeatureOperations.CutFeatureOperation
+    inp.isKeepToolBodies = keep_tool
+    comb.add(inp)
+
 def add_center_bore_and_end_taps(comp, prof, length, makeCenterBore, makeEndTaps):
     des = adsk.fusion.Design.cast(_app.activeProduct)
     unit = prof['unit']
@@ -201,13 +220,13 @@ def add_center_bore_and_end_taps(comp, prof, length, makeCenterBore, makeEndTaps
     bodies = comp.bRepBodies
     if bodies.count == 0:
         return
-    body = bodies.item(0)
+    target = bodies.item(0)
 
-    # --- Center bore: sketch on an end face, one-sided distance > length ---
+    # --- Center bore: create tool cylinder as new body, then Combine->Cut ---
     if makeCenterBore:
         zAxis = adsk.core.Vector3D.create(0, 0, 1)
         posFace, negFace = None, None
-        for f in body.faces:
+        for f in target.faces:
             if isinstance(f.geometry, adsk.core.Plane):
                 n = f.geometry.normal
                 if n.isParallelTo(zAxis):
@@ -218,11 +237,11 @@ def add_center_bore_and_end_taps(comp, prof, length, makeCenterBore, makeEndTaps
             raise RuntimeError('No planar end face found for center bore.')
 
         sk = comp.sketches.add(startFace)
-        circles = sk.sketchCurves.sketchCircles
-        circles.addByCenterRadius(adsk.core.Point3D.create(0, 0, 0), center_d/2.0)
+        sk.sketchCurves.sketchCircles.addByCenterRadius(adsk.core.Point3D.create(0,0,0), center_d/2.0)
 
-        inner_prof, min_area = None, None
+        # Inner circle profile
         profs = sk.profiles
+        inner_prof, min_area = None, None
         for i in range(profs.count):
             p = profs.item(i)
             try:
@@ -235,33 +254,44 @@ def add_center_bore_and_end_taps(comp, prof, length, makeCenterBore, makeEndTaps
         if inner_prof is None:
             raise RuntimeError('Center-bore profile not found.')
 
+        # Extrude NEW BODY cylinder longer than the bar
         w_doc = toDocUnits(prof['width'], unit, des)
         h_doc = toDocUnits(prof['height'], unit, des)
         safe_depth = adsk.core.ValueInput.createByReal(float(length) + 2.0 * max(w_doc, h_doc))
 
         ext = comp.features.extrudeFeatures
-        extInput = ext.createInput(inner_prof, adsk.fusion.FeatureOperations.CutFeatureOperation)
-        extInput.setDistanceExtent(False, safe_depth)  # one-sided deep cut
-        ext.add(extInput)
+        deg0 = adsk.core.ValueInput.createByString("0 deg")
+        extent_all = adsk.fusion.ThroughAllExtentDefinition.create()
+        
+        toolInput = ext.createInput(inner_prof, adsk.fusion.FeatureOperations.NewBodyFeatureOperation)
+        toolInput.setOneSideExtent(extent_all, adsk.fusion.ExtentDirections.NegativeExtentDirection, deg0)
+        #toolInput.setDistanceExtent(False, safe_depth)
+        toolFeat = ext.add(toolInput)
+        tool_body = toolFeat.bodies.item(0)
 
-    # --- End-tap pilots: sketch on both end faces, short distance cut ---
+        # Boolean cut tool from target (pass an ObjectCollection)
+        combine_cut(comp, target, [tool_body], keep_tool=False)
+
+    # --- End-tap pilots: also as tool cylinders + combine cut (short) ---
     if makeEndTaps:
         zAxis = adsk.core.Vector3D.create(0, 0, 1)
         endFaces = []
-        for f in body.faces:
+        for f in target.faces:
             if isinstance(f.geometry, adsk.core.Plane):
                 n = f.geometry.normal
                 if n.isParallelTo(zAxis):
                     endFaces.append(f)
         if len(endFaces) >= 1:
             pilotDepth = des.unitsManager.evaluateExpression('20 mm', des.unitsManager.defaultLengthUnits)
+
+            tool_bodies = []
             for f in endFaces:
                 sk = comp.sketches.add(f)
-                circles = sk.sketchCurves.sketchCircles
-                circles.addByCenterRadius(adsk.core.Point3D.create(0, 0, 0), endtap_d/2.0)
+                sk.sketchCurves.sketchCircles.addByCenterRadius(adsk.core.Point3D.create(0,0,0), endtap_d/2.0)
 
-                inner_prof, min_area = None, None
+                # Inner circle profile
                 profs = sk.profiles
+                inner_prof, min_area = None, None
                 for i in range(profs.count):
                     p = profs.item(i)
                     try:
@@ -274,17 +304,21 @@ def add_center_bore_and_end_taps(comp, prof, length, makeCenterBore, makeEndTaps
                 if inner_prof is None:
                     continue
 
+                # Extrude NEW BODY short cylinder
                 ext = comp.features.extrudeFeatures
-                extInput = ext.createInput(inner_prof, adsk.fusion.FeatureOperations.CutFeatureOperation)
-                extInput.setDistanceExtent(False, adsk.core.ValueInput.createByReal(pilotDepth))
-                ext.add(extInput)
+                toolInput = ext.createInput(inner_prof, adsk.fusion.FeatureOperations.NewBodyFeatureOperation)
+                toolInput.setDistanceExtent(False, adsk.core.ValueInput.createByReal(-1 * pilotDepth))
+                toolFeat = ext.add(toolInput)
+                tool_bodies.append(toolFeat.bodies.item(0))
+
+            if tool_bodies:
+                combine_cut(comp, target, tool_bodies, keep_tool=False)
 
 def apply_appearance_and_name(comp, profName, length_val):
     comp.name = f'{profName} - L={round(length_val,2)}'
     if comp.bRepBodies.count > 0:
         comp.bRepBodies.item(0).name = 'Extrusion'
     try:
-        des = adsk.fusion.Design.cast(_app.activeProduct)
         appLib = _app.materialLibraries.itemByName('Fusion 360 Appearance Library')
         if appLib:
             app = appLib.appearances.itemByName('Aluminum - Anodized (Clear)') or appLib.appearances.itemByName('Aluminum - Satin')
@@ -331,7 +365,7 @@ class CommandExecuteHandler(adsk.core.CommandEventHandler):
             extInput.setSymmetricExtent(half, True)
             ext.add(extInput)
 
-            # Sketch 2: slots (on same plane), then symmetric distance cut > half-length
+            # Sketch 2: slots, then symmetric distance cut (> half length)
             sk_slots = comp.sketches.add(comp.xYConstructionPlane)
             slotProfiles = draw_slots(sk_slots, profile)
             if slotProfiles and slotProfiles.count > 0:
@@ -340,10 +374,14 @@ class CommandExecuteHandler(adsk.core.CommandEventHandler):
                 cutInput.setSymmetricExtent(depth, True)
                 ext.add(cutInput)
 
+            # Construction features
             if cbConst.value:
                 create_construction_for_slots(comp, profile)
 
+            # Center bore and end taps (via tool bodies + combine cut)
             add_center_bore_and_end_taps(comp, profile, length_val, cbCenter.value, cbEnd.value)
+
+            # Naming/appearance
             apply_appearance_and_name(comp, profileName, length_val)
 
             _ui.messageBox('T-slot extrusion created successfully.')
